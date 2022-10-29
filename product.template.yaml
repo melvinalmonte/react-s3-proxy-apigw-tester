@@ -1,0 +1,162 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+
+Resources:
+
+#######CLIENT S3 BUCKET#######
+  FrontendS3:
+    Type: "AWS::S3::Bucket"
+    Properties:
+      BucketName: mels-frontend-bucket
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ["*"]
+            AllowedMethods: [GET, PUT]
+            AllowedOrigins: ["*"]
+            ExposedHeaders: [Date]
+            Id: CORSRules
+            MaxAge: 3600
+
+#######API GATEWAY DEFINITION#######
+  ApiGateway:
+    Type: "AWS::Serverless::Api"
+    Properties:
+      Name: !Sub "${AWS::StackName}"
+      StageName: !Sub "${Stage}"
+      DefinitionBody:
+        openapi: "3.0.1"
+        paths:
+          /{item+}:
+            get:
+              parameters:
+                - name: "Content-Type"
+                  in: "header"
+                  schema:
+                    type: "string"
+                - name: "item"
+                  in: "path"
+                  required: true
+                  schema:
+                    type: "string"
+                - name: "Content-Disposition"
+                  in: "header"
+                  schema:
+                    type: "string"
+              responses:
+                "200":
+                  description: "200 response"
+                  headers:
+                    Content-Disposition:
+                      schema:
+                        type: "string"
+                    Content-Type:
+                      schema:
+                        type: "string"
+                  content:
+                    application/json:
+                      schema:
+                        $ref: "#/components/schemas/Empty"
+              x-amazon-apigateway-integration:
+                type: "aws"
+                credentials:
+                  Fn::GetAtt: [APIGatewayS3AccessRole, Arn]
+                uri:
+                  Fn::Join:
+                    - ""
+                    - - "arn:aws:apigateway:us-east-1:s3:path/"
+                      - Ref: FrontendS3
+                      - "/{item}"
+                httpMethod: "GET"
+                responses:
+                  "200":
+                    statusCode: "200"
+                    responseParameters:
+                      method.response.header.Content-Disposition: "integration.response.header.Content-Disposition"
+                      method.response.header.Content-Type: "integration.response.header.Content-Type"
+                requestParameters:
+                  integration.request.header.Content-Disposition: "method.request.header.Content-Disposition"
+                  integration.request.path.item: "method.request.path.item"
+                  integration.request.header.Content-Type: "method.request.header.Content-Type"
+                passthroughBehavior: "when_no_match"
+            options:
+              responses:
+                "200":
+                  description: "200 response"
+                  headers:
+                    Access-Control-Allow-Origin:
+                      schema:
+                        type: "string"
+                    Access-Control-Allow-Methods:
+                      schema:
+                        type: "string"
+                    Access-Control-Allow-Headers:
+                      schema:
+                        type: "string"
+                  content:
+                    application/json:
+                      schema:
+                        $ref: "#/components/schemas/Empty"
+              x-amazon-apigateway-integration:
+                type: "mock"
+                responses:
+                  default:
+                    statusCode: "200"
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Methods: "'DELETE,GET,HEAD,OPTIONS,PATCH,POST,PUT'"
+                      method.response.header.Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'"
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                requestTemplates:
+                  application/json: '{"statusCode": 200}'
+                passthroughBehavior: "when_no_match"
+        components:
+          schemas:
+            Empty:
+              title: "Empty Schema"
+              type: "object"
+        x-amazon-apigateway-binary-media-types:
+          - "*/*"
+
+#######S3 ACCESS ROLE#######
+  APIGatewayS3AccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - apigateway.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        - PolicyName: bucket-read
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "s3:GetObject"
+                Resource: !Join
+                  - "/"
+                  - - !GetAtt FrontendS3.Arn
+                    - "*"
+
+Outputs:
+  FrontendS3Name:
+    Description: "FrontendS3 Name"
+    Value: !Sub "${FrontendS3}"
+  ApiEndpoint:
+    Description: "API Gateway endpoint URL for Prod stage for API Gateway Multi-Origin CORS function"
+    Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/"
